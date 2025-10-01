@@ -1,0 +1,7 @@
+yfinance
+requests
+pandas
+nltk
+transformers
+torch
+flask
