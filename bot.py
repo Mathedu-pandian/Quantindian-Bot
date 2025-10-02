@@ -108,7 +108,7 @@ def main_loop():
                     send_telegram_message(chat_id, msg)
                     print(f"Update sent to {chat_id}")
 
-        sleep(30)  # check every hour
+        sleep(3600)  # check every hour
 
 # Start main loop in a thread
 Thread(target=main_loop).start()
