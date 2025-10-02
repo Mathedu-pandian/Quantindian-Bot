@@ -1,6 +1,8 @@
+# Core packages
 yfinance==0.2.41
 requests==2.31.0
-pandas==2.1.1
+pandas==2.0.3       # stable prebuilt wheel to avoid compilation errors
+numpy==1.26.5       # ensures compatibility with pandas
 nltk==3.9.1
 flask==2.3.3
 
