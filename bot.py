@@ -93,7 +93,7 @@ def main_loop():
             sleep(60)
             continue
 
-        if MARKET_START <= now <= MARKET_END:
+        #if MARKET_START <= now <= MARKET_END:
             for _, row in users_df.iterrows():
                 chat_id = row['chat_id']
                 portfolio = row['portfolio'].split(",")
