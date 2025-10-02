@@ -12,8 +12,8 @@ import os
 USERS_CSV = os.getenv("USERS_CSV", "users.csv")
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-MARKET_START = dt_time(9, 15)  # NSE market start
-MARKET_END = dt_time(15, 30)   # NSE market end
+MARKET_START = dt_time(9, 15)   # NSE market start
+MARKET_END = dt_time(15, 30)    # NSE market end
 REPORT_HOUR = 16                # End-of-day summary
 # ---------------------------------------------------------------
 
@@ -37,10 +37,13 @@ Thread(target=run_flask).start()
 
 # -------------------- HELPER FUNCTIONS --------------------
 def fetch_price(ticker):
-    stock = yf.Ticker(ticker)
-    hist = stock.history(period="1d", interval="1h")
-    if not hist.empty:
-        return hist['Close'].iloc[-1]
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1d", interval="1h")
+        if not hist.empty:
+            return round(hist['Close'].iloc[-1], 2)
+    except Exception as e:
+        print(f"Price fetch error for {ticker}: {e}")
     return None
 
 def fetch_news(ticker):
@@ -62,36 +65,65 @@ def fetch_news(ticker):
             last_news_titles.setdefault(ticker, []).append(title)
     return news_list
 
-def build_telegram_message(news_data, prices):
-    msg = "📊 *Portfolio Update*\n\n"
-    for n in news_data:
-        price = prices.get(n['ticker'], "N/A")
-        msg += f"*{n['ticker']}* | Price: {price} | Sentiment: {n['sentiment']}\n"
-        msg += f"{n['title']}\n{n['url']}\n\n"
+def build_telegram_message(chat_id, portfolio, news_data, prices):
+    msg = f"📊 *Portfolio Update for {chat_id}*\n\n"
+
+    for ticker in portfolio:
+        price = prices.get(ticker, "N/A")
+        msg += f"*{ticker}* | Price: {price}\n"
+
+        ticker_news = [n for n in news_data if n['ticker'] == ticker]
+        if ticker_news:
+            for n in ticker_news:
+                msg += f"- {n['sentiment']}: {n['title']}\n{n['url']}\n"
+        else:
+            msg += "- No fresh news found\n"
+
+        msg += "\n"
+
     return msg
 
 def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-    requests.post(url, data=payload)
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Telegram send error for {chat_id}: {e}")
 
 # -------------------- MAIN LOOP --------------------
 while True:
     now = datetime.now().time()
     users_df = pd.read_csv(USERS_CSV)
 
-    if MARKET_START <= now <= MARKET_END:
-        for _, row in users_df.iterrows():
-            chat_id = row['chat_id']
-            portfolio = row['portfolio'].split(",")
-            prices = {t: fetch_price(t) for t in portfolio}
+    for _, row in users_df.iterrows():
+        chat_id = row['users']
+        portfolio = [
+            str(row[col]).strip()
+            for col in users_df.columns
+            if col.startswith("Portfolio") and pd.notna(row[col])
+        ]
+
+        prices = {t: fetch_price(t) for t in portfolio}
+
+        # Regular updates during market hours
+        if MARKET_START <= now <= MARKET_END:
             all_news = []
             for t in portfolio:
                 all_news.extend(fetch_news(t))
 
             if all_news:
-                msg = build_telegram_message(all_news, prices)
+                msg = build_telegram_message(chat_id, portfolio, all_news, prices)
                 send_telegram_message(chat_id, msg)
                 print(f"Update sent to {chat_id}")
 
-    sleep(3600)  # check every hour
+        # End-of-day summary at REPORT_HOUR
+        if now.hour == REPORT_HOUR and now.minute < 5:  # send once within first 5 mins
+            summary = "📌 *End of Day Portfolio Summary*\n\n"
+            for t in portfolio:
+                price = prices.get(t, "N/A")
+                summary += f"*{t}* | Closing Price: {price}\n"
+            send_telegram_message(chat_id, summary)
+            print(f"End-of-day summary sent to {chat_id}")
+
+    sleep(300)  # check every 5 mins
