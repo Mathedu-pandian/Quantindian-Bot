@@ -1,69 +1,114 @@
-# bot.py - QuantIndian Bot (without sentiment analysis)
-
-import os
-import requests
 import yfinance as yf
+import requests
 import pandas as pd
-from flask import Flask, request
-from bs4 import BeautifulSoup
-import telegram
+from datetime import datetime, time as dt_time
+from time import sleep
+import os
+import re
 
-# ----------------- CONFIG -----------------
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"  # Replace with your Telegram chat ID
+from flask import Flask
+from threading import Thread
 
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
-app = Flask(__name__)
+# -------------------- ENVIRONMENT VARIABLES --------------------
+USERS_CSV = os.getenv("USERS_CSV", "users.csv")
+NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+MARKET_START = dt_time(9, 15)  # NSE market start
+MARKET_END = dt_time(15, 30)   # NSE market end
+REPORT_HOUR = 16                # End-of-day summary
+# ---------------------------------------------------------------
 
-# ----------------- STOCK FUNCTION -----------------
-def get_stock_price(ticker):
-    """Fetch latest stock price using yfinance"""
-    stock = yf.Ticker(ticker)
-    data = stock.history(period="1d")
-    if not data.empty:
-        return data['Close'].iloc[-1]
+# Track last news per ticker to avoid duplicates
+last_news_titles = {}
+
+# -------------------- FLASK KEEP-ALIVE --------------------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+
+Thread(target=run_flask).start()
+
+# -------------------- HELPER FUNCTIONS --------------------
+def escape_markdown(text):
+    """Escape Markdown special characters for Telegram"""
+    escape_chars = r"_*[]()~`>#+-=|{}.!\""
+    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
+
+def fetch_price(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1d", interval="1h")
+        if not hist.empty:
+            return round(hist['Close'].iloc[-1], 2)
+    except Exception as e:
+        print(f"Error fetching price for {ticker}: {e}")
     return None
 
-# ----------------- NEWS FUNCTION -----------------
-def get_latest_news(url):
-    """Scrape news headlines from a webpage"""
+def fetch_news(ticker):
+    url = f"https://newsdata.io/api/1/news?apikey={NEWSDATA_API_KEY}&q={ticker}&country=in&language=en"
     try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, "html.parser")
-        headlines = [h.text.strip() for h in soup.find_all("h2")][:5]  # Top 5 headlines
-        return headlines
+        data = requests.get(url).json()
     except Exception as e:
-        return [f"Error fetching news: {e}"]
+        print(f"Error fetching news for {ticker}: {e}")
+        return []
 
-# ----------------- TELEGRAM FUNCTION -----------------
-def send_telegram_message(message):
-    """Send message to Telegram"""
-    bot.send_message(chat_id=CHAT_ID, text=message)
+    news_list = []
+    for article in data.get('results', []):
+        title = article.get('title')
+        link = article.get('link')
+        if title and title not in last_news_titles.get(ticker, []):
+            news_list.append({"ticker": ticker, "title": title, "url": link})
+            last_news_titles.setdefault(ticker, []).append(title)
+    return news_list
 
-# ----------------- FLASK ROUTES -----------------
-@app.route('/')
-def home():
-    return "QuantIndian Bot is running!"
+def build_telegram_message(news_data, prices):
+    msg = "📊 *Portfolio Update*\n\n"
+    for n in news_data:
+        price = prices.get(n['ticker'], "N/A")
+        msg += f"*{escape_markdown(n['ticker'])}* - ₹{price}\n"
+        msg += f"{escape_markdown(n['title'])}\n{n['url']}\n\n"
+    return msg.strip()
 
-@app.route('/stock/<ticker>')
-def stock(ticker):
-    price = get_stock_price(ticker)
-    if price:
-        return f"The latest price of {ticker} is {price}"
-    else:
-        return f"Could not fetch price for {ticker}"
+def send_telegram_message(chat_id, message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "MarkdownV2"}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Error sending message to {chat_id}: {e}")
 
-@app.route('/news')
-def news():
-    url = "https://www.moneycontrol.com/news/"  # Example news site
-    headlines = get_latest_news(url)
-    return "<br>".join(headlines)
+# -------------------- MAIN LOOP --------------------
+def main_loop():
+    while True:
+        now = datetime.now().time()
+        try:
+            users_df = pd.read_csv(USERS_CSV)
+        except Exception as e:
+            print(f"Error reading {USERS_CSV}: {e}")
+            sleep(60)
+            continue
 
-@app.route('/send_message/<message>')
-def telegram_message(message):
-    send_telegram_message(message)
-    return f"Message sent: {message}"
+        if MARKET_START <= now <= MARKET_END:
+            for _, row in users_df.iterrows():
+                chat_id = row['chat_id']
+                portfolio = row['portfolio'].split(",")
+                prices = {t: fetch_price(t) for t in portfolio}
 
-# ----------------- RUN APP -----------------
-if __name__ == "__main__":
-    app.run(debug=True)
+                all_news = []
+                for t in portfolio:
+                    all_news.extend(fetch_news(t))
+
+                if all_news:
+                    msg = build_telegram_message(all_news, prices)
+                    send_telegram_message(chat_id, msg)
+                    print(f"Update sent to {chat_id}")
+
+        sleep(3600)  # check every hour
+
+# Start main loop in a thread
+Thread(target=main_loop).start()
