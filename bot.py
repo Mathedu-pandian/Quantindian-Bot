@@ -8,13 +8,13 @@ import re
 # Replace with your actual chat_id (from Telegram)
 USERS = [
     {
-        "chat_id": 1231707073,   # 👈 put your Telegram chat_id here
+        "chat_id": **************,   # 👈 put your Telegram chat_id here
         "portfolio": ["RELIANCE.NS", "TCS.NS", "INFY.NS"]  # 👈 put your tickers here
     },
 ]
 
-NEWSDATA_API_KEY = "pub_7c95805e1b6446f5b4cd782d2c68c701"
-TELEGRAM_TOKEN = "8221603188:AAHLluaWyFoCj1p9olRwAmyLvH80W5hDwFA"
+NEWSDATA_API_KEY = "*************************************"
+TELEGRAM_TOKEN = "***************************************"
 
 MARKET_START = dt_time(9, 15)   # NSE market start
 MARKET_END = dt_time(15, 30)    # NSE market end
